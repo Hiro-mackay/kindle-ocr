@@ -15,6 +15,9 @@ dependencies = [
     "reportlab>=4.4.1",
 ]
 
+[project.scripts]
+kindle-ocr = "kindle_ocr.main:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
