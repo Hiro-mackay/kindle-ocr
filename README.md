@@ -44,6 +44,57 @@ uv pip install -e .
 python main.py
 ```
 
+### コマンドライン引数
+
+スクリプトは以下のコマンドライン引数をサポートしています：
+
+```bash
+python main.py [options]
+```
+
+#### オプション
+
+- `--direction`, `-d`: ページ送りの方向を指定
+
+  - 選択肢: `left` または `right`
+  - デフォルト: `right`
+  - 例: `python main.py --direction left`
+
+- `--region`, `-r`: スクリーンショットの領域を指定
+
+  - 選択肢: `left`（左半分）, `right`（右半分）, `full`（全体）
+  - デフォルト: `full`
+  - 例: `python main.py --region left`
+
+- `--start-step`, `-s`: 処理の開始ステップを指定
+
+  - 選択肢: `screenshot`, `ocr`, `create`, `upload`, `pdf`
+  - 例: `python main.py --start-step ocr`
+
+- `--end-step`, `-e`: 処理の終了ステップを指定
+  - 選択肢: `screenshot`, `ocr`, `create`, `upload`, `pdf`
+  - 例: `python main.py --end-step create`
+
+#### 使用例
+
+1. 左方向にページ送りして左半分のみをキャプチャ:
+
+```bash
+python main.py --direction left --region left
+```
+
+2. OCR 処理から開始してファイル作成まで実行:
+
+```bash
+python main.py --start-step ocr --end-step create
+```
+
+3. スクリーンショット取得のみを実行:
+
+```bash
+python main.py --start-step screenshot --end-step screenshot
+```
+
 ## 注意事項
 
 - スクリプト実行中は Kindle アプリを操作しないでください
