@@ -16,7 +16,7 @@ import re
 # .envファイルから環境変数を読み込む
 load_dotenv()
 
-class KindleOCR:
+class VisionApiOCR:
     def __init__(self, page_turn_direction='right', region='full'):
         self.screenshot_dir = "screenshots"
         self.output_dir = "output"
@@ -282,8 +282,8 @@ def main():
 
     args = parser.parse_args()
     
-    # KindleOCRのインスタンスを作成
-    kindle_ocr = KindleOCR(page_turn_direction=args.direction, region=args.region)
+    # VisionApiOCRのインスタンスを作成
+    vision_api_ocr = VisionApiOCR(page_turn_direction=args.direction, region=args.region)
     
     try:        
         # 通常のOCR処理
@@ -292,16 +292,16 @@ def main():
         end_idx = steps.index(args.end_step) if args.end_step else len(steps) - 1
         
         if start_idx <= 0:  # screenshot
-            kindle_ocr.take_screenshots()
+            vision_api_ocr.take_screenshots()
         
         if start_idx <= 1 and end_idx >= 1:  # ocr
-            text = kindle_ocr.perform_ocr()
+            text = vision_api_ocr.perform_ocr()
         
         if start_idx <= 2 and end_idx >= 2:  # create
-            txt_path = kindle_ocr.create_files(text)
+            txt_path = vision_api_ocr.create_files(text)
         
         if start_idx <= 3 and end_idx >= 3:  # upload
-            kindle_ocr.upload_to_drive([txt_path])
+            vision_api_ocr.upload_to_drive([txt_path])
         
         print("処理が完了しました")
     except Exception as e:
