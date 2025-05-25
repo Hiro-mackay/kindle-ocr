@@ -11,6 +11,7 @@ dependencies = [
     "google-cloud-vision>=3.10.1",
     "pillow>=11.2.1",
     "pyautogui>=0.9.54",
+    "pymupdf>=1.26.0",
     "python-dotenv>=1.1.0",
     "reportlab>=4.4.1",
 ]
