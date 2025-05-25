@@ -19,10 +19,10 @@ PDF_DEFLATE = True  # 画像データの圧縮
 PDF_CLEAN = True  # 重複オブジェクトの削除
 
 # マージン設定（画面サイズに対する比率）
-TOP_MARGIN = 0.12      # 上部の余白
-BOTTOM_MARGIN = 0.04   # 下部の余白
-LEFT_MARGIN = 0.02    # 左側の余白
-RIGHT_MARGIN = 0.12   # 右側の余白
+TOP_MARGIN = 0.1      # 上部の余白
+BOTTOM_MARGIN = 0.1   # 下部の余白
+LEFT_MARGIN = 0.5    # 左側の余白
+RIGHT_MARGIN = 0.5   # 右側の余白
 HALF_POSITION = 0.5   # 左右分割時の中央位置
 
 class KindleToPDF:
