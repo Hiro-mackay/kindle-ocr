@@ -140,3 +140,5 @@ python src/kindle_to_pdf/main.py --screenshot-only
 
 - 高品質な PDF ファイル（.pdf）
 - ファイル名はタイムスタンプから自動生成されます（--output オプションで指定可能）
+
+

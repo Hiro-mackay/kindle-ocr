@@ -19,10 +19,10 @@ PDF_DEFLATE = True  # 画像データの圧縮
 PDF_CLEAN = True  # 重複オブジェクトの削除
 
 # マージン設定（画面サイズに対する比率）
-TOP_MARGIN = 0.1      # 上部の余白
-BOTTOM_MARGIN = 0.1   # 下部の余白
-LEFT_MARGIN = 0.5    # 左側の余白
-RIGHT_MARGIN = 0.5   # 右側の余白
+TOP_MARGIN = 0.12      # 上部の余白
+BOTTOM_MARGIN = 0.04   # 下部の余白
+LEFT_MARGIN = 0.05    # 左側の余白
+RIGHT_MARGIN = 0.05   # 右側の余白
 HALF_POSITION = 0.5   # 左右分割時の中央位置
 
 class KindleToPDF:
@@ -69,16 +69,19 @@ class KindleToPDF:
             right_margin = int(screen_width * HALF_POSITION)
         elif self.region == 'right':
             left_margin = int(screen_width * HALF_POSITION)
-            right_margin = int(screen_width * RIGHT_MARGIN)
+            right_margin = int(screen_width * (1 - RIGHT_MARGIN))
         else:  # 'full'
             left_margin = int(screen_width * LEFT_MARGIN)
-            right_margin = int(screen_width * RIGHT_MARGIN)
+            right_margin = int(screen_width * (1 - RIGHT_MARGIN))
         
         # コンテンツ領域の座標を計算
         left = left_margin
         top = top_margin
         width = right_margin - left_margin
         height = screen_height - top_margin - bottom_margin
+        
+        print(f"画面サイズ: {screen_width}x{screen_height}")
+        print(f"計算された領域: left={left}, top={top}, width={width}, height={height}")
         
         return (left, top, width, height)
 
