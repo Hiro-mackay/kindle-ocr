@@ -10,7 +10,28 @@ from ocrmac import ocrmac
 
 logger = logging.getLogger(__name__)
 
-# 日本語文字のUnicode範囲
+# === 型エイリアス ===
+BoundingBox = tuple[float, float, float, float]  # (x, y, width, height)
+OcrResult = tuple[str, float, BoundingBox]  # (text, confidence, bbox)
+OcrResults = list[OcrResult]
+
+# === テキスト方向検出の定数 ===
+# combined_scoreがこの値を超えたら縦書きと判定
+VERTICAL_THRESHOLD = 0.5
+# height > width * ASPECT_RATIO_THRESHOLD で縦長と判定
+ASPECT_RATIO_THRESHOLD = 1.2
+# x座標トレンドの重み（減少傾向なら縦書き）
+X_TREND_WEIGHT = 0.6
+# アスペクト比の重み
+ASPECT_RATIO_WEIGHT = 0.4
+# 方向検出に必要な最小結果数
+MIN_RESULTS_FOR_DETECTION = 3
+
+# === 有効な設定値 ===
+VALID_FRAMEWORKS = ("livetext", "vision")
+VALID_RECOGNITION_LEVELS = ("fast", "accurate")
+
+# === 日本語文字のUnicode範囲 ===
 _JP_CHARS = r"\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF\uFF00-\uFFEF\u3000-\u303F"
 
 # 日本語文字に挟まれた空白を検出
@@ -26,6 +47,18 @@ class OcrConfig:
     vertical_mode: bool = False  # 縦書きモード（右→左、上→下にソート）
     recognition_level: str = "accurate"  # "fast" or "accurate"（visionのみ）
 
+    def __post_init__(self) -> None:
+        """設定値のバリデーション"""
+        if self.framework not in VALID_FRAMEWORKS:
+            raise ValueError(
+                f"framework must be one of {VALID_FRAMEWORKS}, got '{self.framework}'"
+            )
+        if self.recognition_level not in VALID_RECOGNITION_LEVELS:
+            raise ValueError(
+                f"recognition_level must be one of {VALID_RECOGNITION_LEVELS}, "
+                f"got '{self.recognition_level}'"
+            )
+
 
 def _remove_japanese_spaces(text: str) -> str:
     """
@@ -35,6 +68,34 @@ def _remove_japanese_spaces(text: str) -> str:
     "Hello World" → "Hello World" (英語はそのまま)
     """
     return _JAPANESE_SPACING_PATTERN.sub("", text)
+
+
+def _create_ocr_instance(
+    image_path: str | Path,
+    framework: str = "livetext",
+    languages: list[str] | None = None,
+    recognition_level: str = "accurate",
+) -> ocrmac.OCR:
+    """
+    OCRインスタンスを生成する
+
+    Args:
+        image_path: 画像ファイルのパス
+        framework: OCRエンジン（"livetext" or "vision"）
+        languages: 言語設定（デフォルト: ["ja", "en"]）
+        recognition_level: 認識レベル（"fast" or "accurate"）
+
+    Returns:
+        設定済みのOCRインスタンス
+    """
+    if languages is None:
+        languages = ["ja", "en"]
+    return ocrmac.OCR(
+        str(image_path),
+        framework=framework,
+        language_preference=languages,
+        recognition_level=recognition_level,
+    )
 
 
 def detect_text_orientation(
@@ -54,16 +115,12 @@ def detect_text_orientation(
             confidence: 信頼度 (0.0-1.0)
     """
     try:
-        ocr_instance = ocrmac.OCR(
-            str(image_path),
-            framework=framework,
-            language_preference=["ja", "en"],
-        )
-        results = ocr_instance.recognize()
+        ocr_instance = _create_ocr_instance(image_path, framework=framework)
+        results: OcrResults = ocr_instance.recognize()
     except Exception:
         return ("horizontal", 0.0)
 
-    if len(results) < 3:
+    if len(results) < MIN_RESULTS_FOR_DETECTION:
         return ("horizontal", 0.0)
 
     # 方法1: テキストブロックのx座標の流れを見る
@@ -85,23 +142,21 @@ def detect_text_orientation(
     vertical_boxes = 0
     for _text, _conf, bbox in results:
         _x, _y, width, height = bbox
-        if height > width * 1.2:  # 縦長
+        if height > width * ASPECT_RATIO_THRESHOLD:
             vertical_boxes += 1
     vertical_ratio = vertical_boxes / len(results)
 
     # 両方の指標を組み合わせて判定
     # x座標減少率が高い、またはバウンディングボックスが縦長なら縦書き
-    combined_score = (decreasing_ratio * 0.6) + (vertical_ratio * 0.4)
+    combined_score = (decreasing_ratio * X_TREND_WEIGHT) + (vertical_ratio * ASPECT_RATIO_WEIGHT)
 
-    if combined_score > 0.5:
+    if combined_score > VERTICAL_THRESHOLD:
         return ("vertical", combined_score)
     else:
         return ("horizontal", 1.0 - combined_score)
 
 
-def _sort_for_vertical(
-    results: list[tuple[str, float, tuple[float, float, float, float]]],
-) -> list[tuple[str, float, tuple[float, float, float, float]]]:
+def _sort_for_vertical(results: OcrResults) -> OcrResults:
     """
     縦書き用にソート（右から左、上から下）
 
@@ -111,9 +166,7 @@ def _sort_for_vertical(
     return sorted(results, key=lambda item: (-item[2][0], -item[2][1]))
 
 
-def _sort_for_horizontal(
-    results: list[tuple[str, float, tuple[float, float, float, float]]],
-) -> list[tuple[str, float, tuple[float, float, float, float]]]:
+def _sort_for_horizontal(results: OcrResults) -> OcrResults:
     """
     横書き用にソート（上から下、左から右）
 
@@ -143,17 +196,14 @@ def recognize_text(
     if config is None:
         config = OcrConfig()
 
-    image_path_str = str(image_path)
-
     try:
-        # OCR実行
-        ocr_instance = ocrmac.OCR(
-            image_path_str,
+        ocr_instance = _create_ocr_instance(
+            image_path,
             framework=config.framework,
-            language_preference=config.languages,
+            languages=config.languages,
             recognition_level=config.recognition_level,
         )
-        results = ocr_instance.recognize()
+        results: OcrResults = ocr_instance.recognize()
     except Exception as e:
         raise RuntimeError(f"OCR処理に失敗しました: {e}") from e
 

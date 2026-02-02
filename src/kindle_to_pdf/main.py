@@ -17,10 +17,17 @@ from .ocr import OcrConfig, detect_text_orientation, recognize_text_batch
 # ロガーの設定
 logger = logging.getLogger(__name__)
 
-# 方向設定の定数
+# === 方向設定の定数 ===
 DIRECTION_AUTO = "auto"
 DIRECTION_VERTICAL = "vertical"
 DIRECTION_HORIZONTAL = "horizontal"
+VALID_DIRECTIONS = (DIRECTION_AUTO, DIRECTION_VERTICAL, DIRECTION_HORIZONTAL)
+
+# === リージョン設定の定数 ===
+REGION_LEFT = "left"
+REGION_RIGHT = "right"
+REGION_FULL = "full"
+VALID_REGIONS = (REGION_LEFT, REGION_RIGHT, REGION_FULL)
 
 
 @dataclass
@@ -41,6 +48,13 @@ class MarginConfig:
     left: float = 0.05  # 左側の余白
     right: float = 0.05  # 右側の余白
     half_position: float = 0.5  # 左右分割時の中央位置
+
+    def __post_init__(self) -> None:
+        """設定値のバリデーション（すべて0.0〜1.0の範囲）"""
+        for name in ("top", "bottom", "left", "right", "half_position"):
+            value = getattr(self, name)
+            if not (0.0 <= value <= 1.0):
+                raise ValueError(f"{name} must be between 0.0 and 1.0, got {value}")
 
 
 @dataclass
@@ -214,38 +228,53 @@ class KindleToPDF:
                 f"スクリーンショットファイルが作成されませんでした: {screenshot_path}"
             )
 
-    def take_screenshots(self) -> int:
-        """Kindleの全ページのスクリーンショットを取得"""
-        logger.info("スクリーンショットの取得を開始します...")
-
+    def _prepare_screenshot_dir(self) -> None:
+        """スクリーンショットディレクトリを準備（既存を削除して新規作成）"""
         screenshot_dir = self.config.screenshot_dir
         if screenshot_dir.exists():
-            logger.info("古いスクリーンショットを削除します...")
+            file_count = len(list(screenshot_dir.glob("*.png")))
+            if file_count > 0:
+                logger.info("古いスクリーンショットを削除します（%d件）...", file_count)
             shutil.rmtree(screenshot_dir)
-
         screenshot_dir.mkdir(parents=True, exist_ok=True)
 
-        self.activate_kindle()
+    def _capture_first_page(
+        self, content_region: tuple[int, int, int, int]
+    ) -> tuple[Path, str]:
+        """
+        最初のページをキャプチャしてハッシュを返す
 
-        content_region = self.get_kindle_content_region()
-        logger.info("スクリーンショット領域: %s", content_region)
-
-        # 最初のページを取得
-        page = 1
-        first_screenshot_path = screenshot_dir / f"page_{page}.png"
+        Returns:
+            (screenshot_path, image_hash): スクリーンショットのパスとハッシュ値
+        """
+        screenshot_dir = self.config.screenshot_dir
+        first_screenshot_path = screenshot_dir / "page_1.png"
         self._take_screenshot(first_screenshot_path, content_region)
-        last_hash = self._image_hash(Image.open(first_screenshot_path))
+        image_hash = self._image_hash(Image.open(first_screenshot_path))
+        return first_screenshot_path, image_hash
 
-        # autoモードの場合、テキスト方向を検出
-        if self.direction == DIRECTION_AUTO:
-            self._detect_and_maybe_switch_direction(first_screenshot_path)
+    def _capture_remaining_pages(
+        self,
+        content_region: tuple[int, int, int, int],
+        last_hash: str,
+        start_page: int,
+    ) -> int:
+        """
+        残りのページをキャプチャし、総ページ数を返す
 
-        mode_str = "縦書き" if self.vertical_mode else "横書き"
-        logger.info("テキスト方向: %s（%sキーでページ送り）", mode_str, self.page_turn_key)
+        Args:
+            content_region: スクリーンショット領域
+            last_hash: 前ページの画像ハッシュ
+            start_page: 開始ページ番号
 
-        # 残りのページを取得
+        Returns:
+            総ページ数
+        """
+        screenshot_dir = self.config.screenshot_dir
+        page = start_page
+
+        # 最初のページ送り
         pyautogui.press(self.page_turn_key)
-        page += 1
         time.sleep(self.config.page_turn_delay)
 
         while True:
@@ -271,30 +300,69 @@ class KindleToPDF:
             page += 1
             time.sleep(self.config.page_turn_delay)
 
-        total_pages = page - 1
+        return page - 1
+
+    def _log_direction_info(self) -> None:
+        """現在のテキスト方向設定をログ出力"""
+        mode_str = "縦書き" if self.vertical_mode else "横書き"
+        logger.info("テキスト方向: %s（%sキーでページ送り）", mode_str, self.page_turn_key)
+
+    def take_screenshots(self) -> int:
+        """Kindleの全ページのスクリーンショットを取得"""
+        logger.info("スクリーンショットの取得を開始します...")
+
+        self._prepare_screenshot_dir()
+        self.activate_kindle()
+
+        content_region = self.get_kindle_content_region()
+        logger.info("スクリーンショット領域: %s", content_region)
+
+        first_path, last_hash = self._capture_first_page(content_region)
+
+        # autoモードの場合、テキスト方向を検出
+        if self.direction == DIRECTION_AUTO:
+            self._detect_and_apply_direction(first_path)
+
+        self._log_direction_info()
+
+        total_pages = self._capture_remaining_pages(content_region, last_hash, start_page=2)
         logger.info("スクリーンショットの取得が完了しました。合計%dページ", total_pages)
         return total_pages
 
-    def _detect_and_maybe_switch_direction(self, image_path: Path) -> None:
+    def _detect_text_direction(self, image_path: Path) -> tuple[str, float]:
         """
-        テキスト方向を検出し、縦書きの場合はユーザーに確認して切り替える
+        テキスト方向を検出して結果を返す（状態変更なし）
+
+        Returns:
+            (orientation, confidence): 検出された方向と信頼度
         """
         logger.info("テキスト方向を検出中...")
-
-        detected, confidence = detect_text_orientation(
+        return detect_text_orientation(
             image_path,
             framework=self.config.ocr.framework,
         )
 
+    def _apply_direction_setting(self, detected: str, confidence: float) -> None:
+        """
+        検出結果に基づいて方向設定を適用（必要に応じてユーザーに確認）
+
+        Args:
+            detected: 検出された方向（"vertical" or "horizontal"）
+            confidence: 検出の信頼度
+        """
         if detected == "vertical":
             # 縦書きが検出された場合のみユーザーに確認
             self.vertical_mode = prompt_vertical_mode(confidence)
-            self.config.ocr.vertical_mode = self.vertical_mode
         else:
             # 横書きの場合は確認なしでそのまま
             logger.info("横書きとして検出されました")
             self.vertical_mode = False
-            self.config.ocr.vertical_mode = False
+        self.config.ocr.vertical_mode = self.vertical_mode
+
+    def _detect_and_apply_direction(self, image_path: Path) -> None:
+        """テキスト方向を検出し、設定を適用する"""
+        detected, confidence = self._detect_text_direction(image_path)
+        self._apply_direction_setting(detected, confidence)
 
     def _get_sorted_image_files(self) -> list[tuple[int, Path]]:
         """スクリーンショットファイルをページ番号順でソートして返す"""
@@ -323,7 +391,7 @@ class KindleToPDF:
             return
 
         first_page = sorted_files[0][1]
-        self._detect_and_maybe_switch_direction(first_page)
+        self._detect_and_apply_direction(first_page)
 
         mode_str = "縦書き" if self.vertical_mode else "横書き"
         logger.info("テキスト方向: %s モードで処理します", mode_str)
