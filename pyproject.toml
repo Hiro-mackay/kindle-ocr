@@ -1,13 +1,14 @@
 [project]
 name = "kindle-ocr"
 version = "0.1.0"
-description = "Kindleの本を自動的にスクリーンショット撮影し、高品質なPDFに変換するツール"
+description = "Kindleの本を自動的にスクリーンショット撮影し、OCRでテキスト化してMarkdownとPDFに変換するツール"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "pillow>=11.2.1",
     "pyautogui>=0.9.54",
     "pymupdf>=1.26.0",
+    "pyobjc-framework-Vision>=10.0",
 ]
 
 [project.scripts]
