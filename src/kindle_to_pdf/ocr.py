@@ -1,6 +1,8 @@
 """macOS Vision Framework を使用したOCR処理"""
 
 import re
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import Quartz
 import Vision
@@ -28,7 +30,7 @@ def _remove_japanese_spaces(text: str) -> str:
     return _JAPANESE_SPACING_PATTERN.sub("", text)
 
 
-def recognize_text(image_path: str) -> str:
+def recognize_text(image_path: str | Path) -> str:
     """
     macOS Vision Framework を使用して画像からテキストを認識する
 
@@ -37,10 +39,17 @@ def recognize_text(image_path: str) -> str:
 
     Returns:
         認識されたテキスト
+
+    Raises:
+        ValueError: 画像の読み込みに失敗した場合
+        RuntimeError: OCR処理に失敗した場合
     """
+    image_path_str = str(image_path)
+    image_path_bytes = image_path_str.encode("utf-8")
+
     # 画像を読み込む
     image_url = Quartz.CFURLCreateFromFileSystemRepresentation(
-        None, image_path.encode("utf-8"), len(image_path.encode("utf-8")), False
+        None, image_path_bytes, len(image_path_bytes), False
     )
     image_source = Quartz.CGImageSourceCreateWithURL(image_url, None)
     if image_source is None:
@@ -85,14 +94,19 @@ def recognize_text(image_path: str) -> str:
     return "\n".join(text_lines)
 
 
-def recognize_text_batch(image_paths: list[str]) -> list[str]:
+def recognize_text_batch(
+    image_paths: list[str | Path],
+    max_workers: int = 4,
+) -> list[str]:
     """
-    複数の画像に対してOCRを実行する
+    複数の画像に対してOCRを並列実行する
 
     Args:
         image_paths: 画像ファイルパスのリスト
+        max_workers: 並列実行するワーカー数（デフォルト: 4）
 
     Returns:
         認識されたテキストのリスト（画像の順序と対応）
     """
-    return [recognize_text(path) for path in image_paths]
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        return list(executor.map(recognize_text, image_paths))

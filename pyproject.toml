@@ -1,6 +1,6 @@
 [project]
 name = "kindle-ocr"
-version = "0.1.0"
+version = "1.0.0"
 description = "Kindleの本を自動的にスクリーンショット撮影し、OCRでテキスト化してMarkdownとPDFに変換するツール"
 readme = "README.md"
 requires-python = ">=3.12"
