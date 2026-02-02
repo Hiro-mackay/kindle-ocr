@@ -5,10 +5,10 @@ description = "Kindleの本を自動的にスクリーンショット撮影し�
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "ocrmac>=1.0.0",
     "pillow>=11.2.1",
     "pyautogui>=0.9.54",
     "pymupdf>=1.26.0",
-    "pyobjc-framework-Vision>=10.0",
 ]
 
 [project.scripts]

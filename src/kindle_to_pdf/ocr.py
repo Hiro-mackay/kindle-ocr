@@ -1,22 +1,30 @@
-"""macOS Vision Framework を使用したOCR処理"""
+"""macOS OCR処理（ocrmac + LiveText）"""
 
+import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from pathlib import Path
 
-import Quartz
-import Vision
+from ocrmac import ocrmac
+
+logger = logging.getLogger(__name__)
 
 # 日本語文字のUnicode範囲
-# - ひらがな: \u3040-\u309F
-# - カタカナ: \u30A0-\u30FF
-# - 漢字: \u4E00-\u9FFF, \u3400-\u4DBF
-# - 全角英数・記号: \uFF00-\uFFEF
-# - 句読点: \u3000-\u303F
 _JP_CHARS = r"\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF\uFF00-\uFFEF\u3000-\u303F"
 
-# 日本語文字に挟まれた空白を検出（先読み・後読みで文字を消費しない）
+# 日本語文字に挟まれた空白を検出
 _JAPANESE_SPACING_PATTERN = re.compile(rf"(?<=[{_JP_CHARS}])\s+(?=[{_JP_CHARS}])")
+
+
+@dataclass
+class OcrConfig:
+    """OCR設定"""
+
+    framework: str = "livetext"  # "livetext" or "vision"
+    languages: list[str] = field(default_factory=lambda: ["ja", "en"])
+    vertical_mode: bool = False  # 縦書きモード（右→左、上→下にソート）
+    recognition_level: str = "accurate"  # "fast" or "accurate"（visionのみ）
 
 
 def _remove_japanese_spaces(text: str) -> str:
@@ -25,77 +33,152 @@ def _remove_japanese_spaces(text: str) -> str:
 
     "わ た し" → "わたし"
     "Hello World" → "Hello World" (英語はそのまま)
-    "これは OCR テスト です" → "これはOCRテストです"
     """
     return _JAPANESE_SPACING_PATTERN.sub("", text)
 
 
-def recognize_text(image_path: str | Path) -> str:
+def detect_text_orientation(
+    image_path: str | Path,
+    framework: str = "livetext",
+) -> tuple[str, float]:
     """
-    macOS Vision Framework を使用して画像からテキストを認識する
+    画像のテキスト方向を自動検出する
 
     Args:
         image_path: 画像ファイルのパス
+        framework: OCRエンジン（"livetext" or "vision"）
+
+    Returns:
+        (orientation, confidence):
+            orientation: "vertical" or "horizontal"
+            confidence: 信頼度 (0.0-1.0)
+    """
+    try:
+        ocr_instance = ocrmac.OCR(
+            str(image_path),
+            framework=framework,
+            language_preference=["ja", "en"],
+        )
+        results = ocr_instance.recognize()
+    except Exception:
+        return ("horizontal", 0.0)
+
+    if len(results) < 3:
+        return ("horizontal", 0.0)
+
+    # 方法1: テキストブロックのx座標の流れを見る
+    # 縦書き: 読み進めるとx座標が減少（右から左）
+    # 横書き: 読み進めるとy座標が減少（上から下）
+
+    # y座標でソート（上から下の読み順を仮定）
+    sorted_by_y = sorted(results, key=lambda r: -r[2][1])
+    x_coords = [r[2][0] for r in sorted_by_y]
+
+    # x座標が減少している割合を計算
+    decreasing_count = sum(
+        1 for i in range(len(x_coords) - 1) if x_coords[i] > x_coords[i + 1]
+    )
+    decreasing_ratio = decreasing_count / (len(x_coords) - 1)
+
+    # 方法2: バウンディングボックスのアスペクト比
+    # 縦書きの行は縦長になりやすい
+    vertical_boxes = 0
+    for _text, _conf, bbox in results:
+        _x, _y, width, height = bbox
+        if height > width * 1.2:  # 縦長
+            vertical_boxes += 1
+    vertical_ratio = vertical_boxes / len(results)
+
+    # 両方の指標を組み合わせて判定
+    # x座標減少率が高い、またはバウンディングボックスが縦長なら縦書き
+    combined_score = (decreasing_ratio * 0.6) + (vertical_ratio * 0.4)
+
+    if combined_score > 0.5:
+        return ("vertical", combined_score)
+    else:
+        return ("horizontal", 1.0 - combined_score)
+
+
+def _sort_for_vertical(
+    results: list[tuple[str, float, tuple[float, float, float, float]]],
+) -> list[tuple[str, float, tuple[float, float, float, float]]]:
+    """
+    縦書き用にソート（右から左、上から下）
+
+    bbox: (x, y, width, height) - 左下原点の正規化座標
+    """
+    # x座標が大きい順（右から左）→ y座標が大きい順（上から下）
+    return sorted(results, key=lambda item: (-item[2][0], -item[2][1]))
+
+
+def _sort_for_horizontal(
+    results: list[tuple[str, float, tuple[float, float, float, float]]],
+) -> list[tuple[str, float, tuple[float, float, float, float]]]:
+    """
+    横書き用にソート（上から下、左から右）
+
+    bbox: (x, y, width, height) - 左下原点の正規化座標
+    """
+    # y座標が大きい順（上から下）→ x座標が小さい順（左から右）
+    return sorted(results, key=lambda item: (-item[2][1], item[2][0]))
+
+
+def recognize_text(
+    image_path: str | Path,
+    config: OcrConfig | None = None,
+) -> str:
+    """
+    macOS OCRでテキストを認識する
+
+    Args:
+        image_path: 画像ファイルのパス
+        config: OCR設定（デフォルト: LiveText + 日本語/英語）
 
     Returns:
         認識されたテキスト
 
     Raises:
-        ValueError: 画像の読み込みに失敗した場合
         RuntimeError: OCR処理に失敗した場合
     """
+    if config is None:
+        config = OcrConfig()
+
     image_path_str = str(image_path)
-    image_path_bytes = image_path_str.encode("utf-8")
 
-    # 画像を読み込む
-    image_url = Quartz.CFURLCreateFromFileSystemRepresentation(
-        None, image_path_bytes, len(image_path_bytes), False
-    )
-    image_source = Quartz.CGImageSourceCreateWithURL(image_url, None)
-    if image_source is None:
-        raise ValueError(f"画像を読み込めませんでした: {image_path}")
+    try:
+        # OCR実行
+        ocr_instance = ocrmac.OCR(
+            image_path_str,
+            framework=config.framework,
+            language_preference=config.languages,
+            recognition_level=config.recognition_level,
+        )
+        results = ocr_instance.recognize()
+    except Exception as e:
+        raise RuntimeError(f"OCR処理に失敗しました: {e}") from e
 
-    cg_image = Quartz.CGImageSourceCreateImageAtIndex(image_source, 0, None)
-    if cg_image is None:
-        raise ValueError(f"CGImageの作成に失敗しました: {image_path}")
-
-    # Vision リクエストハンドラを作成
-    request_handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(
-        cg_image, None
-    )
-
-    # テキスト認識リクエストを作成
-    request = Vision.VNRecognizeTextRequest.alloc().init()
-    request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
-    request.setRecognitionLanguages_(["ja", "en"])
-    request.setUsesLanguageCorrection_(True)
-
-    # リクエストを実行
-    success, error = request_handler.performRequests_error_([request], None)
-    if not success:
-        raise RuntimeError(f"OCR処理に失敗しました: {error}")
-
-    # 結果を取得
-    results = request.results()
     if not results:
         return ""
 
-    # テキストを抽出（上から下、左から右の順序で）
+    # 縦書き/横書きに応じてソート
+    if config.vertical_mode:
+        sorted_results = _sort_for_vertical(results)
+    else:
+        sorted_results = _sort_for_horizontal(results)
+
+    # テキストを抽出して連結
     text_lines = []
-    for observation in results:
-        # 最も信頼度の高い候補を取得
-        top_candidate = observation.topCandidates_(1)
-        if top_candidate:
-            line = top_candidate[0].string()
-            # 日本語文字間の不要なスペースを除去
-            line = _remove_japanese_spaces(line)
-            text_lines.append(line)
+    for text, _confidence, _bbox in sorted_results:
+        # 日本語文字間の不要なスペースを除去
+        cleaned_text = _remove_japanese_spaces(text)
+        text_lines.append(cleaned_text)
 
     return "\n".join(text_lines)
 
 
 def recognize_text_batch(
     image_paths: list[str | Path],
+    config: OcrConfig | None = None,
     max_workers: int = 4,
 ) -> list[str]:
     """
@@ -103,10 +186,39 @@ def recognize_text_batch(
 
     Args:
         image_paths: 画像ファイルパスのリスト
+        config: OCR設定
         max_workers: 並列実行するワーカー数（デフォルト: 4）
 
     Returns:
         認識されたテキストのリスト（画像の順序と対応）
     """
+    if config is None:
+        config = OcrConfig()
+
+    total = len(image_paths)
+    results: dict[int, str] = {}
+    completed_count = 0
+
+    def _recognize_with_index(args: tuple[int, str | Path]) -> tuple[int, str]:
+        idx, path = args
+        try:
+            text = recognize_text(path, config)
+            return (idx, text)
+        except Exception as e:
+            logger.warning("OCR失敗 - %s: %s", Path(path).name, e)
+            return (idx, "")
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        return list(executor.map(recognize_text, image_paths))
+        futures = {
+            executor.submit(_recognize_with_index, (i, path)): i
+            for i, path in enumerate(image_paths)
+        }
+
+        for future in as_completed(futures):
+            idx, text = future.result()
+            results[idx] = text
+            completed_count += 1
+            logger.info("OCR処理中: %d/%d 完了", completed_count, total)
+
+    # インデックス順に結果を返す
+    return [results[i] for i in range(total)]
