@@ -1,6 +1,6 @@
 # Kindle OCR
 
-Kindle の本を自動的にスクリーンショット撮影し、OCR でテキスト化して Markdown と PDF に変換するツールです（macOS専用）。
+Kindle の本を自動的にスクリーンショット撮影し、OCR でテキスト化して Markdown と PDF に変換するツールです（macOS 専用）。
 
 NotebookLM などの RAG ツールへの入力に最適化されています。
 
@@ -42,13 +42,13 @@ output/
 
 ## コマンドライン引数
 
-| オプション | 短縮形 | 説明 | デフォルト |
-|-----------|--------|------|-----------|
-| `--output` | `-o` | 出力ファイル名（拡張子なし） | タイムスタンプ |
-| `--direction` | `-d` | ページ送り方向 (`left`/`right`) | `right` |
-| `--region` | `-r` | キャプチャ領域 (`left`/`right`/`full`) | `full` |
-| `--screenshot-only` | `-so` | スクショのみ（OCRなし） | - |
-| `--from-screenshots` | `-fs` | 既存スクショからOCR処理 | - |
+| オプション           | 短縮形 | 説明                                   | デフォルト     |
+| -------------------- | ------ | -------------------------------------- | -------------- |
+| `--output`           | `-o`   | 出力ファイル名（拡張子なし）           | タイムスタンプ |
+| `--direction`        | `-d`   | ページ送り方向 (`left`/`right`)        | `right`        |
+| `--region`           | `-r`   | キャプチャ領域 (`left`/`right`/`full`) | `full`         |
+| `--screenshot-only`  | `-so`  | スクショのみ（OCR なし）               | -              |
+| `--from-screenshots` | `-fs`  | 既存スクショから OCR 処理              | -              |
 
 ## 使用例
 

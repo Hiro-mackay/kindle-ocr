@@ -1,7 +1,31 @@
 """macOS Vision Framework を使用したOCR処理"""
 
+import re
+
 import Quartz
 import Vision
+
+# 日本語文字のUnicode範囲
+# - ひらがな: \u3040-\u309F
+# - カタカナ: \u30A0-\u30FF
+# - 漢字: \u4E00-\u9FFF, \u3400-\u4DBF
+# - 全角英数・記号: \uFF00-\uFFEF
+# - 句読点: \u3000-\u303F
+_JP_CHARS = r"\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF\uFF00-\uFFEF\u3000-\u303F"
+
+# 日本語文字に挟まれた空白を検出（先読み・後読みで文字を消費しない）
+_JAPANESE_SPACING_PATTERN = re.compile(rf"(?<=[{_JP_CHARS}])\s+(?=[{_JP_CHARS}])")
+
+
+def _remove_japanese_spaces(text: str) -> str:
+    """
+    日本語文字間の不要なスペースを除去する
+
+    "わ た し" → "わたし"
+    "Hello World" → "Hello World" (英語はそのまま)
+    "これは OCR テスト です" → "これはOCRテストです"
+    """
+    return _JAPANESE_SPACING_PATTERN.sub("", text)
 
 
 def recognize_text(image_path: str) -> str:
@@ -53,7 +77,10 @@ def recognize_text(image_path: str) -> str:
         # 最も信頼度の高い候補を取得
         top_candidate = observation.topCandidates_(1)
         if top_candidate:
-            text_lines.append(top_candidate[0].string())
+            line = top_candidate[0].string()
+            # 日本語文字間の不要なスペースを除去
+            line = _remove_japanese_spaces(line)
+            text_lines.append(line)
 
     return "\n".join(text_lines)
 
