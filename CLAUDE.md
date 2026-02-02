@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**kindle-ocr** is a macOS Python automation tool that converts Kindle ebooks to Markdown and searchable PDFs. It captures screenshots from the Kindle desktop application, performs OCR using macOS LiveText/Vision Framework via ocrmac, and outputs both Markdown (for RAG/NotebookLM) and PDF with text layer.
+**kindle-ocr** is a macOS Python automation tool that converts Kindle ebooks to Markdown and searchable PDFs. It captures screenshots from the Kindle desktop application, performs OCR using macOS LiveText via ocrmac, and outputs both Markdown (for RAG/NotebookLM) and PDF with text layer.
 
 ## Build and Run Commands
 
@@ -24,9 +24,6 @@ kindle-pdf --from-screenshots --output "book_name"
 # Screenshots only (no OCR)
 kindle-pdf --screenshot-only
 
-# Use Vision framework instead of LiveText
-kindle-pdf --output "book" --ocr-framework vision
-
 # Lint with Ruff
 uvx ruff check src/
 ```
@@ -37,7 +34,7 @@ uvx ruff check src/
 src/kindle_to_pdf/
 ├── __init__.py
 ├── main.py      # CLI and main KindleToPDF class
-└── ocr.py       # macOS OCR via ocrmac (LiveText/Vision)
+└── ocr.py       # macOS OCR via ocrmac (LiveText)
 ```
 
 ### Processing Flow
@@ -45,7 +42,7 @@ src/kindle_to_pdf/
 ```
 1. Activate Kindle app (AppleScript)
 2. Take screenshots (screencapture CLI)
-3. OCR each page (ocrmac LiveText/Vision)
+3. OCR each page (ocrmac LiveText)
 4. Output Markdown (concatenated text)
 5. Output PDF (images + transparent text layer)
 ```
@@ -53,24 +50,26 @@ src/kindle_to_pdf/
 ### Key Files
 
 **main.py** - `KindleToPDF` class
+
 - `take_screenshots()` - Capture pages until duplicate detected
 - `perform_ocr()` - OCR all screenshots with OcrConfig
 - `create_markdown()` - Output `.md` file
 - `create_pdf()` - Output `.pdf` with text layer
 
 **ocr.py** - `recognize_text(image_path, config)`
-- Uses `ocrmac` library with LiveText (default) or Vision framework
+
+- Uses `ocrmac` library with LiveText (macOS Sonoma+)
 - `OcrConfig` dataclass for OCR settings
 - Vertical text sorting support (`vertical_mode=True`)
 
 ### Key Patterns
 
-- **OCR Engine:** LiveText (default, macOS Sonoma+) or Vision (macOS 10.15+)
+- **OCR Engine:** LiveText (macOS Sonoma+)
 - **Vertical Mode:** Sorts text right-to-left, top-to-bottom for Japanese novels
 - **Margin system:** Configurable percentages via MarginConfig dataclass
 - **Region selection:** `left`, `right`, or `full` for dual-page displays
 - **End detection:** Image hash comparison to detect last page
-- **Platform:** macOS-only (LiveText/Vision, AppleScript, screencapture)
+- **Platform:** macOS-only (LiveText, AppleScript, screencapture)
 
 ## File Locations
 
@@ -80,7 +79,7 @@ src/kindle_to_pdf/
 
 ## Dependencies
 
-- `ocrmac` - macOS LiveText/Vision OCR wrapper
+- `ocrmac` - macOS LiveText OCR wrapper
 - `pymupdf` - PDF creation with text layer
 - `pyautogui` - Keyboard control for page turning
 - `pillow` - Image handling

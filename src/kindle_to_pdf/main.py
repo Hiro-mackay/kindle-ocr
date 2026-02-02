@@ -12,7 +12,12 @@ import fitz  # PyMuPDF
 import pyautogui
 from PIL import Image
 
-from .ocr import OcrConfig, detect_text_orientation, recognize_text_batch
+from .ocr import (
+    OcrConfig,
+    detect_text_orientation,
+    recognize_text_batch,
+    _merge_paragraph_lines,
+)
 
 # ロガーの設定
 logger = logging.getLogger(__name__)
@@ -43,10 +48,10 @@ class PdfConfig:
 class MarginConfig:
     """マージン設定（画面サイズに対する比率）"""
 
-    top: float = 0.12  # 上部の余白
-    bottom: float = 0.04  # 下部の余白
+    top: float = 0.1  # 上部の余白
+    bottom: float = 0.05  # 下部の余白
     left: float = 0.05  # 左側の余白
-    right: float = 0.05  # 右側の余白
+    right: float = 0  # 右側の余白
     half_position: float = 0.5  # 左右分割時の中央位置
 
     def __post_init__(self) -> None:
@@ -337,10 +342,7 @@ class KindleToPDF:
             (orientation, confidence): 検出された方向と信頼度
         """
         logger.info("テキスト方向を検出中...")
-        return detect_text_orientation(
-            image_path,
-            framework=self.config.ocr.framework,
-        )
+        return detect_text_orientation(image_path)
 
     def _apply_direction_setting(self, detected: str, confidence: float) -> None:
         """
@@ -406,12 +408,8 @@ class KindleToPDF:
             logger.warning("OCR対象のファイルがありません")
             return
 
-        logger.info("OCR処理を開始します（%d並列）...", max_workers)
-        logger.info(
-            "OCRエンジン: %s, 縦書きモード: %s",
-            ocr_config.framework,
-            ocr_config.vertical_mode,
-        )
+        logger.info("OCR処理を開始します...")
+        logger.info("縦書きモード: %s", ocr_config.vertical_mode)
 
         page_numbers = [page_num for page_num, _ in sorted_files]
         image_paths = [image_path for _, image_path in sorted_files]
@@ -433,15 +431,19 @@ class KindleToPDF:
 
         # ページ順にテキストを連結
         sorted_pages = sorted(self.ocr_results.keys())
-        all_text = []
+        all_lines: list[str] = []
 
         for page_num in sorted_pages:
             text = self.ocr_results[page_num].strip()
             if text:
-                all_text.append(text)
+                # 各ページのテキストを行に分割して追加
+                all_lines.extend(text.split("\n"))
+
+        # ページをまたぐ文章も結合（LLM RAG用に最適化）
+        merged_text = _merge_paragraph_lines(all_lines)
 
         # Markdownファイルに書き出し
-        md_path.write_text("\n\n".join(all_text), encoding="utf-8")
+        md_path.write_text(merged_text, encoding="utf-8")
 
         logger.info("Markdownファイルを作成しました: %s", md_path)
         return md_path
@@ -466,19 +468,6 @@ class KindleToPDF:
 
             # 画像を挿入
             page.insert_image(page.rect, filename=str(image_path))
-
-            # OCRテキストがあれば透明テキストレイヤーとして追加
-            if page_num in self.ocr_results and self.ocr_results[page_num]:
-                text = self.ocr_results[page_num]
-                # 透明テキストを追加（検索可能にするため）
-                text_rect = fitz.Rect(0, 0, img.width, img.height)
-                page.insert_textbox(
-                    text_rect,
-                    text,
-                    fontsize=1,
-                    color=(1, 1, 1),  # 白色（背景に溶け込む）
-                    opacity=0,  # 完全に透明
-                )
 
         logger.info("PDFの保存を開始します...")
         logger.debug(
@@ -513,6 +502,30 @@ class KindleToPDF:
         pdf_path = self.create_pdf()
         self._log_completion(md_path, pdf_path)
         return md_path, pdf_path
+
+    def preview_screenshot(self) -> Path:
+        """
+        現在のKindleページのみをスクリーンショットしてプレビュー保存
+
+        スクリーンショット設定（マージン、リージョン）が正しいか確認するために使用。
+        出力先: output/preview.png
+        """
+        logger.info("プレビュー用スクリーンショットを取得します...")
+
+        self.activate_kindle()
+        content_region = self.get_kindle_content_region()
+
+        logger.info("スクリーンショット領域: %s", content_region)
+        logger.info("  リージョン: %s", self.region)
+
+        # プレビューファイルを output/ に保存
+        preview_path = self.config.output_dir / "preview.png"
+        self._take_screenshot(preview_path, content_region)
+
+        logger.info("プレビューを保存しました: %s", preview_path)
+        logger.info("このファイルを確認して、マージンやリージョンの設定が正しいかご確認ください。")
+
+        return preview_path
 
     def run_from_screenshots(self) -> tuple[Path, Path]:
         """既存のスクリーンショットからOCR→Markdown/PDF作成"""
@@ -580,10 +593,10 @@ def main() -> None:
         help="既存のスクリーンショットからOCR→Markdown/PDF作成",
     )
     parser.add_argument(
-        "--ocr-framework",
-        choices=["livetext", "vision"],
-        default="livetext",
-        help="OCRエンジン (livetext: 推奨/高精度, vision: 互換性用)",
+        "--preview",
+        "-p",
+        action="store_true",
+        help="現在のKindleページのみをスクリーンショットして設定を確認",
     )
     parser.add_argument(
         "--verbose",
@@ -600,10 +613,7 @@ def main() -> None:
     vertical_mode = args.direction == DIRECTION_VERTICAL
 
     # OCR設定
-    ocr_config = OcrConfig(
-        framework=args.ocr_framework,
-        vertical_mode=vertical_mode,
-    )
+    ocr_config = OcrConfig(vertical_mode=vertical_mode)
 
     # アプリ設定
     app_config = AppConfig(ocr=ocr_config)
@@ -616,6 +626,10 @@ def main() -> None:
     )
 
     try:
+        if args.preview:
+            kindle.preview_screenshot()
+            return
+
         if args.from_screenshots:
             kindle.run_from_screenshots()
             return
